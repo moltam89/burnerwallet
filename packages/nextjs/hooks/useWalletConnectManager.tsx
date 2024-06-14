@@ -107,6 +107,120 @@ export const useWalletConnectManager = () => {
     });
   }
 
+  async function onSessionProposal({ id, params }: Web3WalletTypes.SessionProposal) {
+    setSessionProposalData({ id, params });
+    setIsSessionProposalOpen(true);
+  }
+
+  async function onSessionRequest(event: Web3WalletTypes.SessionRequest) {
+    const { topic, params, id } = event;
+    const { chainId, request } = params;
+    const requestParamsMessage = request.params[0];
+
+    const currentChainId = window?.localStorage?.getItem?.(SCAFFOLD_CHAIN_ID_STORAGE_KEY) ?? networks[0].id.toString();
+
+    if (!chainId || !currentChainId) {
+      return await web3wallet.respondSessionRequest({
+        topic,
+        response: errorResponse(id, "Invalid chain"),
+      });
+    }
+
+    const chainIdNumber = parseInt(chainId.split(":")[1]);
+    const chainFromRequest = chains.find(c => c.id === chainIdNumber);
+
+    if (!chainFromRequest) {
+      return await web3wallet.respondSessionRequest({
+        topic,
+        response: errorResponse(id, "Invalid chain from request"),
+      });
+    }
+
+    if (chainIdNumber !== parseInt(currentChainId)) {
+      if (!switchNetwork) {
+        return await web3wallet.respondSessionRequest({
+          topic,
+          response: errorResponse(id, "Can not switch network"),
+        });
+      }
+
+      try {
+        if (confirm(`Do you want to switch to ${chainFromRequest.name}?`)) {
+          switchNetwork(chainIdNumber);
+        } else {
+          return await web3wallet.respondSessionRequest({
+            topic,
+            response: errorResponse(id, "User rejected network switch"),
+          });
+        }
+      } catch (error: any) {
+        return await web3wallet.respondSessionRequest({
+          topic,
+          response: errorResponse(id, error.message),
+        });
+      }
+    }
+
+    switch (request.method) {
+      case EIP155_SIGNING_METHODS.PERSONAL_SIGN:
+      case EIP155_SIGNING_METHODS.ETH_SIGN:
+        const messageToSign = isHex(requestParamsMessage) ? hexToString(requestParamsMessage) : requestParamsMessage;
+        setConfirmationData({
+          id,
+          topic,
+          chain: chainFromRequest,
+          method: request.method,
+          data: messageToSign,
+        });
+        setIsTransactionConfirmOpen(true);
+        return;
+      case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA:
+      case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA_V3:
+      case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA_V4:
+        let data = request.params.filter((p: any) => !isAddress(p))[0];
+
+        if (typeof data === "string") {
+          data = JSON.parse(data);
+        }
+        setConfirmationData({
+          id,
+          topic,
+          chain: chainFromRequest,
+          method: request.method,
+          data: data,
+        });
+        setIsTransactionConfirmOpen(true);
+        return;
+      case EIP155_SIGNING_METHODS.ETH_SEND_TRANSACTION:
+      case EIP155_SIGNING_METHODS.ETH_SIGN_TRANSACTION:
+        const fieldsToCheck = ["value", "gas"];
+        for (const field of fieldsToCheck) {
+          if (typeof requestParamsMessage[field] === "string") {
+            if (requestParamsMessage[field].endsWith("n")) {
+              requestParamsMessage[field] = BigInt(requestParamsMessage[field].slice(0, -1));
+            } else {
+              requestParamsMessage[field] = hexToBigInt(requestParamsMessage[field]);
+            }
+          }
+        }
+        setConfirmationData({
+          id,
+          topic,
+          chain: chainFromRequest,
+          method: request.method,
+          data: requestParamsMessage,
+        });
+        setIsTransactionConfirmOpen(true);
+        return;
+      default:
+        console.error("Invalid Method");
+        return await web3wallet.respondSessionRequest({
+          topic,
+          response: errorResponse(id, "Invalid Method"),
+        });
+    }
+  }
+
   async function onConnect(uri: string) {
     const { topic: pairingTopic } = parseUri(uri);
 
@@ -116,121 +230,6 @@ export const useWalletConnectManager = () => {
         web3wallet.core.pairing.events.removeListener("pairing_expire", pairingExpiredListener);
       }
     };
-
-    async function onSessionProposal({ id, params }: Web3WalletTypes.SessionProposal) {
-      setSessionProposalData({ id, params });
-      setIsSessionProposalOpen(true);
-    }
-
-    async function onSessionRequest(event: Web3WalletTypes.SessionRequest) {
-      const { topic, params, id } = event;
-      const { chainId, request } = params;
-      const requestParamsMessage = request.params[0];
-
-      const currentChainId =
-        window?.localStorage?.getItem?.(SCAFFOLD_CHAIN_ID_STORAGE_KEY) ?? networks[0].id.toString();
-
-      if (!chainId || !currentChainId) {
-        return await web3wallet.respondSessionRequest({
-          topic,
-          response: errorResponse(id, "Invalid chain"),
-        });
-      }
-
-      const chainIdNumber = parseInt(chainId.split(":")[1]);
-      const chainFromRequest = chains.find(c => c.id === chainIdNumber);
-
-      if (!chainFromRequest) {
-        return await web3wallet.respondSessionRequest({
-          topic,
-          response: errorResponse(id, "Invalid chain from request"),
-        });
-      }
-
-      if (chainIdNumber !== parseInt(currentChainId)) {
-        if (!switchNetwork) {
-          return await web3wallet.respondSessionRequest({
-            topic,
-            response: errorResponse(id, "Can not switch network"),
-          });
-        }
-
-        try {
-          if (confirm(`Do you want to switch to ${chainFromRequest.name}?`)) {
-            switchNetwork(chainIdNumber);
-          } else {
-            return await web3wallet.respondSessionRequest({
-              topic,
-              response: errorResponse(id, "User rejected network switch"),
-            });
-          }
-        } catch (error: any) {
-          return await web3wallet.respondSessionRequest({
-            topic,
-            response: errorResponse(id, error.message),
-          });
-        }
-      }
-
-      switch (request.method) {
-        case EIP155_SIGNING_METHODS.PERSONAL_SIGN:
-        case EIP155_SIGNING_METHODS.ETH_SIGN:
-          const messageToSign = isHex(requestParamsMessage) ? hexToString(requestParamsMessage) : requestParamsMessage;
-          setConfirmationData({
-            id,
-            topic,
-            chain: chainFromRequest,
-            method: request.method,
-            data: messageToSign,
-          });
-          setIsTransactionConfirmOpen(true);
-          return;
-        case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA:
-        case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA_V3:
-        case EIP155_SIGNING_METHODS.ETH_SIGN_TYPED_DATA_V4:
-          let data = request.params.filter((p: any) => !isAddress(p))[0];
-
-          if (typeof data === "string") {
-            data = JSON.parse(data);
-          }
-          setConfirmationData({
-            id,
-            topic,
-            chain: chainFromRequest,
-            method: request.method,
-            data: data,
-          });
-          setIsTransactionConfirmOpen(true);
-          return;
-        case EIP155_SIGNING_METHODS.ETH_SEND_TRANSACTION:
-        case EIP155_SIGNING_METHODS.ETH_SIGN_TRANSACTION:
-          const fieldsToCheck = ["value", "gas"];
-          for (const field of fieldsToCheck) {
-            if (typeof requestParamsMessage[field] === "string") {
-              if (requestParamsMessage[field].endsWith("n")) {
-                requestParamsMessage[field] = BigInt(requestParamsMessage[field].slice(0, -1));
-              } else {
-                requestParamsMessage[field] = hexToBigInt(requestParamsMessage[field]);
-              }
-            }
-          }
-          setConfirmationData({
-            id,
-            topic,
-            chain: chainFromRequest,
-            method: request.method,
-            data: requestParamsMessage,
-          });
-          setIsTransactionConfirmOpen(true);
-          return;
-        default:
-          console.error("Invalid Method");
-          return await web3wallet.respondSessionRequest({
-            topic,
-            response: errorResponse(id, "Invalid Method"),
-          });
-      }
-    }
 
     try {
       setLoading(true);
@@ -423,6 +422,29 @@ export const useWalletConnectManager = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletConnectUid, walletConnectSession, isWalletConnectInitialized]);
+
+  useEffect(() => {
+    if (!isWalletConnectInitialized || !web3wallet) {
+      return;
+    }
+
+    const activeSession = Object.values(web3wallet.getActiveSessions())[0];
+
+    if (activeSession && !walletConnectSession) {
+      if (!initialized) {
+        web3wallet.on("session_proposal", onSessionProposal);
+        web3wallet.on("session_request", onSessionRequest);
+
+        web3wallet.on("session_delete", async data => {
+          console.log("session_delete event received", data);
+          setWalletConnectSession(null);
+          notification.success("Disconnected from WalletConnect");
+        });
+        setInitialized(true);
+      }
+      setWalletConnectSession(activeSession);
+    }
+  }, [web3wallet, isWalletConnectInitialized]);
 
   return {
     onConnect,
